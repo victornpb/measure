@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photo Measurement Tool</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #222;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        #toolbar {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            background-color: #333;
+            padding: 10px;
+            color: white;
+        }
+
+        #toolbar input,
+        #toolbar button {
+            /* margin: 0 3px; */
+        }
+
+        #toolbar span {
+            margin-left: 2em;
+        }
+
+        canvas {
+            border: 1px solid black;
+            margin-top: 20px;
+        }
+
+        .line-length {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-family: monospace;
+            transform: translate(-50%, -50%);
+        }
+
+        .handle {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            border-radius: 14px;
+            transform: translate(-50%, -50%);
+
+            cursor: move;
+            opacity: 0.1;
+            background-color: cyan;
+        }
+
+        .reference-handle {
+            background-color: red;
+        }
+
+        .handle:hover {
+            opacity: 0.5;
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+
+        .handle:active {
+            opacity: 1;
+            cursor: none;
+            border-radius: 100%;
+            border: 1px dotted cyan;
+            background-color: transparent !important;
+            transform: translate(-50%, -50%) scale(2);
+        }
+
+
+
+        .delete-line {
+            cursor: pointer;
+            color: red;
+            font-weight: bold;
+            position: absolute;
+            transform: translate(50%, -50%);
+        }
+
+        .reference-length {
+            position: absolute;
+            /* width: 60px; */
+            transform: translate(-50%, -50%);
+            opacity: 0.3;
+            display: flex;
+        }
+
+        .reference-length:hover,
+        .reference-length:focus {
+            opacity: 1;
+        }
+
+        .reference-length input {
+            width: 55px;
+        }
+
+        .reference-length select {
+            max-width: 40px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div id="toolbar">
+            <input type="file" @change="handleImage" accept="image/*">
+
+            <span>
+                <button @click="startDrawing('reference')" :disabled="referenceLine && referenceLine.end">Add Reference Size</button>
+            </span>
+
+            <span>
+                <button @click="startDrawing('measurement')">New Measurement Line</button>
+                <button @click="removeAll()">Remove All Measurement</button>
+            </span>
+        </div>
+
+        <!-- Lines -->
+        <div v-for="(line, index) in lines" :key="index">
+            <div v-if="line.end" class="line-length" :style="{ left: `${(line.start.x + line.end.x) / 2 + canvasOffsetLeft}px`, top: `${(line.start.y + line.end.y) / 2 + canvasOffsetTop}px` }">
+                {{ getLineLength(line) }}
+                <span class="delete-line" @click="deleteLine(index)">✖</span>
+            </div>
+            <div v-for="(handle, handleIndex) in line.handles" :key="handleIndex" class="handle"
+                :style="{ left: `${handle.x + canvasOffsetLeft}px`, top: `${handle.y + canvasOffsetTop}px` }"
+                @mousedown="startDragging($event, line, handleIndex + 1)">
+            </div>
+        </div>
+
+        <!-- Reference Line -->
+        <div v-if="referenceLine && referenceLine.end">
+            <div class="reference-length" :style="{ left: `${(referenceLine.start.x + referenceLine.end.x) / 2 + canvasOffsetLeft}px`, top: `${(referenceLine.start.y + referenceLine.end.y) / 2 + canvasOffsetTop}px` }">
+                <input type="number" v-model.number="referenceLength" @input="updateMeasurementLabels" size="4" min="0"
+                    step="0.1">
+                <select v-model="unit">
+                    <option value="">none</option>
+                    <option value="mm">mm</option>
+                    <option value="cm">cm</option>
+                    <option value="m">m</option>
+                    <option value="in">in</option>
+                </select>
+            </div>
+            <div v-for="(handle, handleIndex) in referenceLine.handles" :key="handleIndex" class="handle reference-handle" :style="{ left: `${handle.x + canvasOffsetLeft}px`, top: `${handle.y + canvasOffsetTop}px` }" @mousedown="startDragging($event, referenceLine, handleIndex + 1)">
+            </div>
+        </div>
+
+        <canvas ref="canvas" width="800" height="600" @click="placeLine" :style="{cursor: isAddingLine || isAddingReferenceLine ? 'crosshair' : ''}"></canvas>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data: {
+                img: null,
+
+                lines: [],
+                referenceLine: null,
+
+                isAddingLine: false,
+                isAddingReferenceLine: false,
+
+                currentHandle: null,
+                referenceLength: 0,
+                unit: 'mm',
+                scale: 1,
+
+                canvasOffsetLeft: 0,
+                canvasOffsetTop: 0,
+            },
+            mounted() {
+                window.addEventListener('resize', this.updateCanvasOffsets);
+                this.$nextTick(() => this.updateCanvasOffsets());
+            },
+            beforeDestroy() {
+                window.removeEventListener('resize', this.updateCanvasOffsets);
+            },
+            methods: {
+                handleImage(event) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        this.img = new Image();
+                        this.img.onload = () => {
+                            const canvas = this.$refs.canvas;
+                            canvas.width = this.img.width;
+                            canvas.height = this.img.height;
+                            this.updateCanvas();
+                        };
+                        this.img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(event.target.files[0]);
+                },
+                startDrawing(type) {
+                    this.isAddingLine = type === 'measurement';
+                    this.isAddingReferenceLine = type === 'reference';
+                },
+                removeAll() {
+                    this.lines = [];
+                    this.updateCanvas();
+                },
+                placeLine(e) {
+                    const { x, y } = this.getCanvasCoordinates(e);
+                    if (this.isAddingLine) {
+                        this.addMeasurementLine(x, y);
+                    } else if (this.isAddingReferenceLine) {
+                        this.addReferenceLine(x, y);
+                    }
+                },
+                addMeasurementLine(x, y) {
+                    if (!this.lines.length || this.lines[this.lines.length - 1].end) {
+                        this.lines.push({
+                            start: { x, y },
+                            end: null,
+                            handles: [{ x, y }],
+                        });
+                    } else {
+                        const currentLine = this.lines[this.lines.length - 1];
+                        currentLine.end = { x, y };
+                        currentLine.handles.push({ x, y });
+                        this.isAddingLine = false;
+                        this.updateCanvas();
+                    }
+                },
+                addReferenceLine(x, y) {
+                    if (!this.referenceLine) {
+                        this.referenceLine = {
+                            start: { x, y },
+                            end: null,
+                            handles: [{ x, y }],
+                        };
+                    } else if (!this.referenceLine.end) {
+                        this.referenceLine.end = { x, y };
+                        this.referenceLine.handles.push({ x, y });
+                        this.isAddingReferenceLine = false;
+                        this.referenceLength = 1;
+                        this.updateMeasurementLabels();
+                        this.updateCanvas();
+                    }
+                },
+                updateMeasurementLabels() {
+                    if (this.referenceLine && this.referenceLine.end) {
+                        const referenceLength = parseFloat(this.referenceLength) || 0;
+                        if (referenceLength > 0) {
+                            const referencePxLength = this.calculateLineLength(this.referenceLine);
+                            this.scale = referenceLength / referencePxLength;
+                        } else {
+                            this.scale = 1;
+                        }
+                    }
+                },
+                getLineLength(line) {
+                    if (!line.start || !line.end) return '0 px';
+                    const length = this.calculateLineLength(line);
+                    return this.referenceLength > 0 ? `${(length * this.scale).toFixed(2)} ${this.unit}` : `${length.toFixed(2)} px`;
+                },
+                calculateLineLength(line) {
+                    const dx = line.end.x - line.start.x;
+                    const dy = line.end.y - line.start.y;
+                    return Math.sqrt(dx * dx + dy * dy);
+                },
+                getCanvasCoordinates(e) {
+                    const rect = this.$refs.canvas.getBoundingClientRect();
+                    return {
+                        x: e.clientX - rect.left,
+                        y: e.clientY - rect.top
+                    };
+                },
+                updateCanvas() {
+                    const canvas = this.$refs.canvas;
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    if (this.img) {
+                        ctx.drawImage(this.img, 0, 0);
+                    }
+                    if (this.referenceLine && this.referenceLine.end) this.drawLine(this.referenceLine, '#ff00ff', 'red');
+                    this.lines.forEach(line => {
+                        if (line.end) this.drawLine(line, '#00ff00', 'blue');
+                    });
+                },
+                drawLine(line, color, handleColor) {
+                    const canvas = this.$refs.canvas;
+                    const ctx = canvas.getContext('2d');
+                    ctx.strokeStyle = color;
+                    ctx.beginPath();
+                    ctx.moveTo(line.start.x, line.start.y);
+                    ctx.lineTo(line.end.x, line.end.y);
+                    ctx.stroke();
+
+                    // Draw perpendicular end lines
+                    this.drawPerpendicularEnds(ctx, line);
+
+                    line.handles[0].x = line.start.x;
+                    line.handles[0].y = line.start.y;
+                    line.handles[1].x = line.end.x;
+                    line.handles[1].y = line.end.y;
+                },
+                drawPerpendicularEnds(ctx, line) {
+                    const endLength = 10; // Length of the perpendicular lines at the ends
+
+                    const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x);
+                    const sinAngle = Math.sin(angle);
+                    const cosAngle = Math.cos(angle);
+
+                    // Start end
+                    const startX = line.start.x - endLength * sinAngle;
+                    const startY = line.start.y + endLength * cosAngle;
+                    const endX1 = line.start.x + endLength * sinAngle;
+                    const endY1 = line.start.y - endLength * cosAngle;
+
+                    // End end
+                    const startX2 = line.end.x - endLength * sinAngle;
+                    const startY2 = line.end.y + endLength * cosAngle;
+                    const endX2 = line.end.x + endLength * sinAngle;
+                    const endY2 = line.end.y - endLength * cosAngle;
+
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(endX1, endY1);
+                    ctx.stroke();
+
+                    ctx.beginPath();
+                    ctx.moveTo(startX2, startY2);
+                    ctx.lineTo(endX2, endY2);
+                    ctx.stroke();
+                },
+                deleteLine(index) {
+                    if (index !== -1) {
+                        this.lines.splice(index, 1);
+                        this.updateCanvas();
+                    }
+                },
+                startDragging(event, line, handleIndex) {
+                    this.currentHandle = { line, handleIndex };
+                    document.addEventListener('mousemove', this.dragHandle);
+                    document.addEventListener('mouseup', this.endDraggingHandle);
+                },
+                dragHandle(event) {
+                    if (!this.currentHandle) return;
+                    const { x, y } = this.getCanvasCoordinates(event);
+                    const handle = this.currentHandle.line.handles[this.currentHandle.handleIndex - 1];
+                    handle.x = x;
+                    handle.y = y;
+                    if (this.currentHandle.handleIndex === 1) {
+                        this.currentHandle.line.start = { x, y };
+                    } else {
+                        this.currentHandle.line.end = { x, y };
+                    }
+                    this.updateMeasurementLabels();
+                    this.updateCanvas();
+                },
+                endDraggingHandle() {
+                    this.currentHandle = null;
+                    document.removeEventListener('mousemove', this.dragHandle);
+                    document.removeEventListener('mouseup', this.endDraggingHandle);
+                },
+                updateCanvasOffsets() {
+                    const canvas = this.$refs.canvas;
+                    const rect = canvas.getBoundingClientRect();
+                    this.canvasOffsetLeft = rect.left;
+                    this.canvasOffsetTop = rect.top;
+                }
+            }
+        });
+    </script>
+</body>
+
+</html>
