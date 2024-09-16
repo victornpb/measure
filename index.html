@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Photo Measurement Tool</title>
+    <title>📐 Measure Image Tool </title>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
     <style>
         * {
@@ -34,7 +34,7 @@
 
         #toolbar input,
         #toolbar button {
-            /* margin: 0 3px; */
+            margin: 0 3px;
         }
 
         #toolbar span {
@@ -63,7 +63,6 @@
             height: 14px;
             border-radius: 14px;
             transform: translate(-50%, -50%);
-
             cursor: move;
             opacity: 0.1;
             background-color: cyan;
@@ -87,8 +86,6 @@
             transform: translate(-50%, -50%) scale(2);
         }
 
-
-
         .delete-line {
             cursor: pointer;
             color: red;
@@ -99,7 +96,6 @@
 
         .reference-length {
             position: absolute;
-            /* width: 60px; */
             transform: translate(-50%, -50%);
             opacity: 0.3;
             display: flex;
@@ -123,16 +119,27 @@
 <body>
     <div id="app">
         <div id="toolbar">
-            <input type="file" @change="handleImage" accept="image/*">
-
             <span>
-                <button @click="startDrawing('reference')" :disabled="referenceLine && referenceLine.end">Add Reference Size</button>
+                <b>📐 Measure App</b>
+            </span>
+<span>
+    Image
+    <input type="file" @change="handleImage" accept="image/*">
+</span>
+            
+            <span>
+                Measure
+                <button @click="startDrawing('measurement')">📏 Add Line</button>
+                <button @click="removeAll()">❌ Clear Lines</button>
             </span>
 
             <span>
-                <button @click="startDrawing('measurement')">New Measurement Line</button>
-                <button @click="removeAll()">Remove All Measurement</button>
+                DPI: <input type="number" v-model.number="dpi" @input="updateScaleFromDPI" min="0" step="1" size="4">
+                or
+                <button @click="startDrawing('reference')" :disabled="referenceLine && referenceLine.end">📏 Draw Reference Line</button>
+                <button @click="removeReferenceLine" :disabled="!referenceLine">❌ Remove Reference Line</button>
             </span>
+
         </div>
 
         <!-- Lines -->
@@ -184,6 +191,8 @@
                 unit: 'mm',
                 scale: 1,
 
+                dpi: 300,
+
                 canvasOffsetLeft: 0,
                 canvasOffsetTop: 0,
             },
@@ -215,6 +224,13 @@
                 },
                 removeAll() {
                     this.lines = [];
+                    this.referenceLine = null; // Clear reference line when removing all
+                    this.updateScaleFromDPI(); // Reset scale if no reference line
+                    this.updateCanvas();
+                },
+                removeReferenceLine() {
+                    this.referenceLine = null; // Remove reference line
+                    this.updateScaleFromDPI(); // Update scale based on DPI if available
                     this.updateCanvas();
                 },
                 placeLine(e) {
@@ -265,12 +281,25 @@
                         } else {
                             this.scale = 1;
                         }
+                    } else {
+                        this.updateScaleFromDPI();
                     }
+                },
+                updateScaleFromDPI() {
+                    if (this.dpi > 0 && (!this.referenceLine || !this.referenceLine.end)) {
+                        // Correct DPI conversion to mm scale
+                        this.scale = 25.4 / this.dpi; // Convert DPI to mm per pixel (1 inch = 25.4 mm)
+                    } else if (this.referenceLine && this.referenceLine.end) {
+                        this.updateMeasurementLabels(); // Use reference line if it exists
+                    } else {
+                        this.scale = 1;
+                    }
+                    this.updateCanvas();
                 },
                 getLineLength(line) {
                     if (!line.start || !line.end) return '0 px';
                     const length = this.calculateLineLength(line);
-                    return this.referenceLength > 0 ? `${(length * this.scale).toFixed(2)} ${this.unit}` : `${length.toFixed(2)} px`;
+                    return this.scale !== 1 ? `${(length * this.scale).toFixed(2)} ${this.unit}` : `${length.toFixed(2)} px`;
                 },
                 calculateLineLength(line) {
                     const dx = line.end.x - line.start.x;
