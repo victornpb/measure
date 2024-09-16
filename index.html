@@ -133,13 +133,20 @@
             display: flex;
             flex-direction: column;
             gap: 5px;
+            align-items: center;
         }
 
         #controls button {
-            width: 30px;
+            width: 45px;
             height: 30px;
-            font-size: 16px;
+            font-size: 12px;
             cursor: pointer;
+        }
+
+        #zoom-level {
+            font-size: 14px;
+            color: white;
+            margin-top: 5px;
         }
     </style>
 </head>
@@ -168,8 +175,11 @@
         <!-- Zoom and Pan Controls -->
         <div id="controls">
             <button @click="zoomIn">+</button>
-            <button @click="resetZoom">100%</button>
+            <span id="zoom-level">{{ (zoomLevel * 100).toFixed(0) }}%</span>
             <button @click="zoomOut">-</button>
+
+            <button @click="resetZoom">100%</button>
+            <button @click="fitToWindow">Fit</button>
         </div>
 
         <!-- Lines -->
@@ -243,15 +253,20 @@
             },
             methods: {
                 handleImage(event) {
+                    const canvas = this.$refs.canvas;
+
                     const reader = new FileReader();
                     reader.onload = (e) => {
                         this.img = new Image();
                         this.img.onload = () => {
                             this.updateCanvas();
+                            if (this.img.naturalWidth > canvas.width || this.img.naturalHeight > canvas.height) this.fitToWindow();
+                            else this.resetZoom();
                         };
                         this.img.src = e.target.result;
                     };
                     reader.readAsDataURL(event.target.files[0]);
+
                 },
                 startDrawing(type) {
                     this.isAddingLine = type === 'measurement';
@@ -461,7 +476,7 @@
                 },
                 handleZoomAndPan(event) {
                     event.preventDefault();
-                    
+
                     // Check if the event should zoom or pan
                     if (event.ctrlKey) {
                         // Handle zoom
@@ -470,7 +485,10 @@
                         const mouseY = (event.clientY - rect.top) / this.zoomLevel - this.panY / this.zoomLevel;
 
                         const zoomFactor = event.deltaY > 0 ? 0.95 : 1.05;
-                        const newZoomLevel = this.zoomLevel * zoomFactor;
+                        let newZoomLevel = this.zoomLevel * zoomFactor;
+
+                        // Limit zoom level between 0.001 (0.1%) and 100 (10000%)
+                        newZoomLevel = Math.max(0.001, Math.min(100, newZoomLevel));
 
                         this.panX -= (mouseX * (newZoomLevel - this.zoomLevel));
                         this.panY -= (mouseY * (newZoomLevel - this.zoomLevel));
@@ -490,7 +508,10 @@
                     const centerY = canvas.height / 2 / this.zoomLevel - this.panY / this.zoomLevel;
 
                     const zoomFactor = 1.1;
-                    const newZoomLevel = this.zoomLevel * zoomFactor;
+                    let newZoomLevel = this.zoomLevel * zoomFactor;
+
+                    // Limit zoom level
+                    newZoomLevel = Math.max(0.001, Math.min(100, newZoomLevel));
 
                     this.panX -= (centerX * (newZoomLevel - this.zoomLevel));
                     this.panY -= (centerY * (newZoomLevel - this.zoomLevel));
@@ -504,7 +525,10 @@
                     const centerY = canvas.height / 2 / this.zoomLevel - this.panY / this.zoomLevel;
 
                     const zoomFactor = 0.9;
-                    const newZoomLevel = this.zoomLevel * zoomFactor;
+                    let newZoomLevel = this.zoomLevel * zoomFactor;
+
+                    // Limit zoom level
+                    newZoomLevel = Math.max(0.001, Math.min(100, newZoomLevel));
 
                     this.panX -= (centerX * (newZoomLevel - this.zoomLevel));
                     this.panY -= (centerY * (newZoomLevel - this.zoomLevel));
@@ -518,12 +542,24 @@
                     this.panY = 0;
                     this.updateCanvas();
                 },
+                fitToWindow() {
+                    if (!this.img) return;
+
+                    const canvas = this.$refs.canvas;
+                    const scaleX = canvas.width / this.img.width;
+                    const scaleY = canvas.height / this.img.height;
+                    this.zoomLevel = Math.min(scaleX, scaleY);
+                    this.panX = (canvas.width - this.img.width * this.zoomLevel) / 2;
+                    this.panY = (canvas.height - this.img.height * this.zoomLevel) / 2;
+
+                    this.updateCanvas();
+                },
                 handleKeyPan(event) {
                     const panStep = 20;
-                    if (event.key === 'ArrowUp') this.panY -= panStep;
-                    if (event.key === 'ArrowDown') this.panY += panStep;
-                    if (event.key === 'ArrowLeft') this.panX -= panStep;
-                    if (event.key === 'ArrowRight') this.panX += panStep;
+                    if (event.key === 'ArrowUp') this.panY += panStep;
+                    if (event.key === 'ArrowDown') this.panY -= panStep;
+                    if (event.key === 'ArrowLeft') this.panX += panStep;
+                    if (event.key === 'ArrowRight') this.panX -= panStep;
                     this.updateCanvas();
                 },
                 startTouchPan(event) {
@@ -544,7 +580,12 @@
                     } else if (event.touches.length === 2) {
                         const newDistance = this.getPinchDistance(event.touches);
                         const zoomFactor = newDistance / this.lastPinchDistance;
-                        this.zoomLevel *= zoomFactor > 1 ? 1.01 : 0.99; // Adjust sensitivity for pinch
+                        let newZoomLevel = this.zoomLevel * (zoomFactor > 1 ? 1.01 : 0.99); // Adjust sensitivity for pinch
+
+                        // Limit zoom level
+                        newZoomLevel = Math.max(0.001, Math.min(100, newZoomLevel));
+
+                        this.zoomLevel = newZoomLevel;
                         this.lastPinchDistance = newDistance;
                         this.updateCanvas();
                     }
