@@ -3,23 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📐 Measure Image Tool </title>
+    <title>📐 Measure Image Tool</title>
     <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
     <style>
         * {
             box-sizing: border-box;
         }
 
-        html,
-        body {
+        html, body {
             margin: 0;
             padding: 0;
+            overflow: hidden; /* Prevent scrolling */
+            width: 100%;
+            height: 100%;
         }
 
         body {
             background-color: #222;
             color: #fff;
             font-family: sans-serif;
+        }
+
+        #app {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
         }
 
         #toolbar {
@@ -30,10 +39,10 @@
             background-color: #333;
             padding: 10px;
             color: white;
+            z-index: 10;
         }
 
-        #toolbar input,
-        #toolbar button {
+        #toolbar input, #toolbar button {
             margin: 0 3px;
         }
 
@@ -42,12 +51,15 @@
         }
 
         canvas {
-            border: 1px solid black;
-            margin-top: 20px;
+            cursor: grab;
+            flex-grow: 1;
+        }
+
+        .line-length, .handle, .reference-length, .delete-line {
+            position: absolute;
         }
 
         .line-length {
-            position: absolute;
             background: rgba(0, 0, 0, 0.5);
             color: white;
             padding: 2px 5px;
@@ -58,7 +70,6 @@
         }
 
         .handle {
-            position: absolute;
             width: 14px;
             height: 14px;
             border-radius: 14px;
@@ -90,19 +101,16 @@
             cursor: pointer;
             color: red;
             font-weight: bold;
-            position: absolute;
             transform: translate(50%, -50%);
         }
 
         .reference-length {
-            position: absolute;
             transform: translate(-50%, -50%);
             opacity: 0.3;
             display: flex;
         }
 
-        .reference-length:hover,
-        .reference-length:focus {
+        .reference-length:hover, .reference-length:focus {
             opacity: 1;
         }
 
@@ -113,52 +121,72 @@
         .reference-length select {
             max-width: 40px;
         }
+
+        #controls {
+            position: fixed;
+            top: 50px;
+            right: 10px;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        #controls button {
+            width: 30px;
+            height: 30px;
+            font-size: 16px;
+            cursor: pointer;
+        }
     </style>
 </head>
 
 <body>
     <div id="app">
         <div id="toolbar">
+            <span><b>📐 Measure App</b></span>
             <span>
-                <b>📐 Measure App</b>
+                Image
+                <input type="file" @change="handleImage" accept="image/*">
             </span>
-<span>
-    Image
-    <input type="file" @change="handleImage" accept="image/*">
-</span>
-            
             <span>
                 Measure
                 <button @click="startDrawing('measurement')">📏 Add Line</button>
                 <button @click="removeAll()">❌ Clear Lines</button>
             </span>
-
             <span>
-                DPI: <input type="number" v-model.number="dpi" @input="updateScaleFromDPI" min="0" step="1" size="4">
+                DPI: <input type="number" v-model.number="dpi" @input="updateScaleFromDPI" :disabled="referenceLine" min="0" step="1" size="4">
                 or
                 <button @click="startDrawing('reference')" :disabled="referenceLine && referenceLine.end">📏 Draw Reference Line</button>
                 <button @click="removeReferenceLine" :disabled="!referenceLine">❌ Remove Reference Line</button>
             </span>
+        </div>
 
+        <!-- Zoom and Pan Controls -->
+        <div id="controls">
+            <button @click="zoomIn">+</button>
+            <button @click="resetZoom">100%</button>
+            <button @click="zoomOut">-</button>
         </div>
 
         <!-- Lines -->
         <div v-for="(line, index) in lines" :key="index">
-            <div v-if="line.end" class="line-length" :style="{ left: `${(line.start.x + line.end.x) / 2 + canvasOffsetLeft}px`, top: `${(line.start.y + line.end.y) / 2 + canvasOffsetTop}px` }">
+            <div v-if="line.end" class="line-length" :style="getLineStyle(line)">
                 {{ getLineLength(line) }}
                 <span class="delete-line" @click="deleteLine(index)">✖</span>
             </div>
-            <div v-for="(handle, handleIndex) in line.handles" :key="handleIndex" class="handle"
-                :style="{ left: `${handle.x + canvasOffsetLeft}px`, top: `${handle.y + canvasOffsetTop}px` }"
+            <div v-for="(handle, handleIndex) in line.handles" :key="handleIndex" class="handle" :style="getHandleStyle(handle)"
                 @mousedown="startDragging($event, line, handleIndex + 1)">
             </div>
         </div>
 
         <!-- Reference Line -->
         <div v-if="referenceLine && referenceLine.end">
-            <div class="reference-length" :style="{ left: `${(referenceLine.start.x + referenceLine.end.x) / 2 + canvasOffsetLeft}px`, top: `${(referenceLine.start.y + referenceLine.end.y) / 2 + canvasOffsetTop}px` }">
-                <input type="number" v-model.number="referenceLength" @input="updateMeasurementLabels" size="4" min="0"
-                    step="0.1">
+            <div class="reference-length" :style="getLineStyle(referenceLine)">
+                <input type="number" v-model.number="referenceLength" @input="updateMeasurementLabels" size="4" min="0" step="0.1">
                 <select v-model="unit">
                     <option value="">none</option>
                     <option value="mm">mm</option>
@@ -167,11 +195,13 @@
                     <option value="in">in</option>
                 </select>
             </div>
-            <div v-for="(handle, handleIndex) in referenceLine.handles" :key="handleIndex" class="handle reference-handle" :style="{ left: `${handle.x + canvasOffsetLeft}px`, top: `${handle.y + canvasOffsetTop}px` }" @mousedown="startDragging($event, referenceLine, handleIndex + 1)">
+            <div v-for="(handle, handleIndex) in referenceLine.handles" :key="handleIndex" class="handle reference-handle" :style="getHandleStyle(handle)"
+                @mousedown="startDragging($event, referenceLine, handleIndex + 1)">
             </div>
         </div>
 
-        <canvas ref="canvas" width="800" height="600" @click="placeLine" :style="{cursor: isAddingLine || isAddingReferenceLine ? 'crosshair' : ''}"></canvas>
+        <canvas ref="canvas" width="800" height="600" @click="placeLine" :style="{ cursor: isAddingLine || isAddingReferenceLine ? 'crosshair' : '' }"
+            @mousedown="startPan" @touchstart="startTouchPan" @touchmove="handleTouchMove" @touchend="endTouchPan"></canvas>
     </div>
 
     <script>
@@ -179,29 +209,37 @@
             el: '#app',
             data: {
                 img: null,
-
                 lines: [],
                 referenceLine: null,
-
                 isAddingLine: false,
                 isAddingReferenceLine: false,
-
                 currentHandle: null,
                 referenceLength: 0,
                 unit: 'mm',
                 scale: 1,
-
-                dpi: 300,
-
+                dpi: '',
                 canvasOffsetLeft: 0,
                 canvasOffsetTop: 0,
+                zoomLevel: 1,
+                panX: 0,
+                panY: 0,
+                isPanning: false,
+                startX: 0,
+                startY: 0,
+                isTouchPanning: false,
+                lastPinchDistance: 0,
+                lastMoveEventTime: 0,
             },
             mounted() {
                 window.addEventListener('resize', this.updateCanvasOffsets);
+                window.addEventListener('keydown', this.handleKeyPan);
                 this.$nextTick(() => this.updateCanvasOffsets());
+
+                this.$refs.canvas.addEventListener('wheel', this.handleZoomAndPan, { passive: false });
             },
             beforeDestroy() {
                 window.removeEventListener('resize', this.updateCanvasOffsets);
+                window.removeEventListener('keydown', this.handleKeyPan);
             },
             methods: {
                 handleImage(event) {
@@ -209,9 +247,6 @@
                     reader.onload = (e) => {
                         this.img = new Image();
                         this.img.onload = () => {
-                            const canvas = this.$refs.canvas;
-                            canvas.width = this.img.width;
-                            canvas.height = this.img.height;
                             this.updateCanvas();
                         };
                         this.img.src = e.target.result;
@@ -224,13 +259,13 @@
                 },
                 removeAll() {
                     this.lines = [];
-                    this.referenceLine = null; // Clear reference line when removing all
-                    this.updateScaleFromDPI(); // Reset scale if no reference line
+                    this.referenceLine = null;
+                    this.updateScaleFromDPI();
                     this.updateCanvas();
                 },
                 removeReferenceLine() {
-                    this.referenceLine = null; // Remove reference line
-                    this.updateScaleFromDPI(); // Update scale based on DPI if available
+                    this.referenceLine = null;
+                    this.updateScaleFromDPI();
                     this.updateCanvas();
                 },
                 placeLine(e) {
@@ -287,10 +322,9 @@
                 },
                 updateScaleFromDPI() {
                     if (this.dpi > 0 && (!this.referenceLine || !this.referenceLine.end)) {
-                        // Correct DPI conversion to mm scale
-                        this.scale = 25.4 / this.dpi; // Convert DPI to mm per pixel (1 inch = 25.4 mm)
+                        this.scale = 25.4 / this.dpi;
                     } else if (this.referenceLine && this.referenceLine.end) {
-                        this.updateMeasurementLabels(); // Use reference line if it exists
+                        this.updateMeasurementLabels();
                     } else {
                         this.scale = 1;
                     }
@@ -309,14 +343,20 @@
                 getCanvasCoordinates(e) {
                     const rect = this.$refs.canvas.getBoundingClientRect();
                     return {
-                        x: e.clientX - rect.left,
-                        y: e.clientY - rect.top
+                        x: (e.clientX - rect.left - this.panX) / this.zoomLevel,
+                        y: (e.clientY - rect.top - this.panY) / this.zoomLevel,
                     };
                 },
                 updateCanvas() {
                     const canvas = this.$refs.canvas;
                     const ctx = canvas.getContext('2d');
+                    canvas.width = canvas.clientWidth;
+                    canvas.height = canvas.clientHeight;
+
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.save();
+                    ctx.scale(this.zoomLevel, this.zoomLevel);
+                    ctx.translate(this.panX / this.zoomLevel, this.panY / this.zoomLevel);
                     if (this.img) {
                         ctx.drawImage(this.img, 0, 0);
                     }
@@ -324,6 +364,7 @@
                     this.lines.forEach(line => {
                         if (line.end) this.drawLine(line, '#00ff00', 'blue');
                     });
+                    ctx.restore();
                 },
                 drawLine(line, color, handleColor) {
                     const canvas = this.$refs.canvas;
@@ -333,39 +374,29 @@
                     ctx.moveTo(line.start.x, line.start.y);
                     ctx.lineTo(line.end.x, line.end.y);
                     ctx.stroke();
-
-                    // Draw perpendicular end lines
                     this.drawPerpendicularEnds(ctx, line);
-
                     line.handles[0].x = line.start.x;
                     line.handles[0].y = line.start.y;
                     line.handles[1].x = line.end.x;
                     line.handles[1].y = line.end.y;
                 },
                 drawPerpendicularEnds(ctx, line) {
-                    const endLength = 10; // Length of the perpendicular lines at the ends
-
+                    const endLength = 10;
                     const angle = Math.atan2(line.end.y - line.start.y, line.end.x - line.start.x);
                     const sinAngle = Math.sin(angle);
                     const cosAngle = Math.cos(angle);
-
-                    // Start end
                     const startX = line.start.x - endLength * sinAngle;
                     const startY = line.start.y + endLength * cosAngle;
                     const endX1 = line.start.x + endLength * sinAngle;
                     const endY1 = line.start.y - endLength * cosAngle;
-
-                    // End end
                     const startX2 = line.end.x - endLength * sinAngle;
                     const startY2 = line.end.y + endLength * cosAngle;
                     const endX2 = line.end.x + endLength * sinAngle;
                     const endY2 = line.end.y - endLength * cosAngle;
-
                     ctx.beginPath();
                     ctx.moveTo(startX, startY);
                     ctx.lineTo(endX1, endY1);
                     ctx.stroke();
-
                     ctx.beginPath();
                     ctx.moveTo(startX2, startY2);
                     ctx.lineTo(endX2, endY2);
@@ -406,7 +437,138 @@
                     const rect = canvas.getBoundingClientRect();
                     this.canvasOffsetLeft = rect.left;
                     this.canvasOffsetTop = rect.top;
-                }
+                    canvas.width = canvas.clientWidth;
+                    canvas.height = canvas.clientHeight;
+                    this.updateCanvas();
+                },
+                startPan(event) {
+                    this.isPanning = true;
+                    this.startX = event.clientX - this.panX;
+                    this.startY = event.clientY - this.panY;
+                    document.addEventListener('mousemove', this.pan);
+                    document.addEventListener('mouseup', this.endPan);
+                },
+                pan(event) {
+                    if (!this.isPanning) return;
+                    this.panX = event.clientX - this.startX;
+                    this.panY = event.clientY - this.startY;
+                    this.updateCanvas();
+                },
+                endPan() {
+                    this.isPanning = false;
+                    document.removeEventListener('mousemove', this.pan);
+                    document.removeEventListener('mouseup', this.endPan);
+                },
+                handleZoomAndPan(event) {
+                    event.preventDefault();
+                    
+                    // Check if the event should zoom or pan
+                    if (event.ctrlKey) {
+                        // Handle zoom
+                        const rect = this.$refs.canvas.getBoundingClientRect();
+                        const mouseX = (event.clientX - rect.left) / this.zoomLevel - this.panX / this.zoomLevel;
+                        const mouseY = (event.clientY - rect.top) / this.zoomLevel - this.panY / this.zoomLevel;
+
+                        const zoomFactor = event.deltaY > 0 ? 0.95 : 1.05;
+                        const newZoomLevel = this.zoomLevel * zoomFactor;
+
+                        this.panX -= (mouseX * (newZoomLevel - this.zoomLevel));
+                        this.panY -= (mouseY * (newZoomLevel - this.zoomLevel));
+
+                        this.zoomLevel = newZoomLevel;
+                    } else {
+                        // Handle pan
+                        this.panX -= event.deltaX;
+                        this.panY -= event.deltaY;
+                    }
+
+                    this.updateCanvas();
+                },
+                zoomIn() {
+                    const canvas = this.$refs.canvas;
+                    const centerX = canvas.width / 2 / this.zoomLevel - this.panX / this.zoomLevel;
+                    const centerY = canvas.height / 2 / this.zoomLevel - this.panY / this.zoomLevel;
+
+                    const zoomFactor = 1.1;
+                    const newZoomLevel = this.zoomLevel * zoomFactor;
+
+                    this.panX -= (centerX * (newZoomLevel - this.zoomLevel));
+                    this.panY -= (centerY * (newZoomLevel - this.zoomLevel));
+
+                    this.zoomLevel = newZoomLevel;
+                    this.updateCanvas();
+                },
+                zoomOut() {
+                    const canvas = this.$refs.canvas;
+                    const centerX = canvas.width / 2 / this.zoomLevel - this.panX / this.zoomLevel;
+                    const centerY = canvas.height / 2 / this.zoomLevel - this.panY / this.zoomLevel;
+
+                    const zoomFactor = 0.9;
+                    const newZoomLevel = this.zoomLevel * zoomFactor;
+
+                    this.panX -= (centerX * (newZoomLevel - this.zoomLevel));
+                    this.panY -= (centerY * (newZoomLevel - this.zoomLevel));
+
+                    this.zoomLevel = newZoomLevel;
+                    this.updateCanvas();
+                },
+                resetZoom() {
+                    this.zoomLevel = 1;
+                    this.panX = 0;
+                    this.panY = 0;
+                    this.updateCanvas();
+                },
+                handleKeyPan(event) {
+                    const panStep = 20;
+                    if (event.key === 'ArrowUp') this.panY -= panStep;
+                    if (event.key === 'ArrowDown') this.panY += panStep;
+                    if (event.key === 'ArrowLeft') this.panX -= panStep;
+                    if (event.key === 'ArrowRight') this.panX += panStep;
+                    this.updateCanvas();
+                },
+                startTouchPan(event) {
+                    if (event.touches.length === 1) {
+                        this.isTouchPanning = true;
+                        this.startX = event.touches[0].clientX - this.panX;
+                        this.startY = event.touches[0].clientY - this.panY;
+                    } else if (event.touches.length === 2) {
+                        this.isTouchPanning = false;
+                        this.lastPinchDistance = this.getPinchDistance(event.touches);
+                    }
+                },
+                handleTouchMove(event) {
+                    if (this.isTouchPanning && event.touches.length === 1) {
+                        this.panX = event.touches[0].clientX - this.startX;
+                        this.panY = event.touches[0].clientY - this.startY;
+                        this.updateCanvas();
+                    } else if (event.touches.length === 2) {
+                        const newDistance = this.getPinchDistance(event.touches);
+                        const zoomFactor = newDistance / this.lastPinchDistance;
+                        this.zoomLevel *= zoomFactor > 1 ? 1.01 : 0.99; // Adjust sensitivity for pinch
+                        this.lastPinchDistance = newDistance;
+                        this.updateCanvas();
+                    }
+                },
+                endTouchPan() {
+                    this.isTouchPanning = false;
+                },
+                getPinchDistance(touches) {
+                    const dx = touches[0].clientX - touches[1].clientX;
+                    const dy = touches[0].clientY - touches[1].clientY;
+                    return Math.sqrt(dx * dx + dy * dy);
+                },
+                getLineStyle(line) {
+                    return {
+                        left: `${(line.start.x + line.end.x) / 2 * this.zoomLevel + this.panX + this.canvasOffsetLeft}px`,
+                        top: `${(line.start.y + line.end.y) / 2 * this.zoomLevel + this.panY + this.canvasOffsetTop}px`,
+                    };
+                },
+                getHandleStyle(handle) {
+                    return {
+                        left: `${handle.x * this.zoomLevel + this.panX + this.canvasOffsetLeft}px`,
+                        top: `${handle.y * this.zoomLevel + this.panY + this.canvasOffsetTop}px`,
+                    };
+                },
             }
         });
     </script>
